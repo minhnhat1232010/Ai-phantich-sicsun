@@ -1,0 +1,15 @@
+{
+  "name": "tai-xiu-prediction-api",
+  "version": "1.0.0",
+  "description": "API server for predicting TaiXiu outcomes",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^2.7.0"
+  },
+  "author": "Your Name",
+  "license": "ISC"
+}
