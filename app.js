@@ -1,7 +1,7 @@
 // Import necessary modules
 const express = require('express');
 const fetch = require('node-fetch');
-const path = require('path');
+const { LogisticRegression } = require('ml-logistic-regression'); // Import the AI library
 const app = express();
 
 // --- Configuration ---
@@ -18,6 +18,7 @@ function analyzeHistoricalData(data) {
     const results = data.data.resultList || [];
     const scores = results.map(result => result.score);
     const facesList = results.map(result => result.facesList);
+    const bonusCounts = results.map(result => result.lastBonusCount || 0);
 
     // Calculate frequency of scores and Tài/Xỉu
     const scoreCounts = scores.reduce((acc, score) => {
@@ -56,25 +57,36 @@ function analyzeHistoricalData(data) {
 
     // Calculate mean and standard deviation of scores
     const meanScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 10.5;
-    const stdScore = scores.length > 0 ? Math.sqrt(scores.map(s => Math.pow(s - meanScore, 2)).reduce((a, b) => a + b) / scores.length) : 1.0;
+    const stdScore = scores.length > 0 ? Math.sqrt(scores.map(s => Math.pow(s - meanScore, 2)).reduce((a, b) => a + b, 0) / scores.length) : 1.0;
+
+    // Calculate recency-weighted score probabilities
+    const recencyWeights = scores.map((_, i) => 1 + (totalGames - i) / totalGames); // Linear weight: recent games matter more
+    const weightedScoreCounts = scores.reduce((acc, score, i) => {
+        acc[score] = (acc[score] || 0) + recencyWeights[i];
+        return acc;
+    }, {});
 
     return {
         scoreCounts,
+        weightedScoreCounts,
         taiProb: taiCount / totalGames || 0.5,
         xiuProb: xiuCount / totalGames || 0.5,
         transitionProbs,
         diceProbs,
         meanScore,
-        stdScore
+        stdScore,
+        bonusCounts
     };
 }
 
-function duDoanTX(historicalData, prevTong) {
+// --- Enhanced Prediction Algorithms ---
+function duDoanTX(historicalData, prevTong, recentScores) {
     const prevResult = getTaiXiu(prevTong);
     let taiProb = historicalData.taiProb;
     let xiuProb = historicalData.xiuProb;
     const transitionProbs = historicalData.transitionProbs;
 
+    // Adjust probabilities with transition probabilities
     if (prevResult === "Tài") {
         taiProb *= transitionProbs["Tài->Tài"];
         xiuProb *= transitionProbs["Tài->Xỉu"];
@@ -82,6 +94,12 @@ function duDoanTX(historicalData, prevTong) {
         taiProb *= transitionProbs["Xỉu->Tài"];
         xiuProb *= transitionProbs["Xỉu->Xỉu"];
     }
+
+    // Incorporate recency: boost probability based on recent games (last 5)
+    const recentTaiCount = recentScores.filter(score => score >= 11).length;
+    const recentWeight = recentTaiCount / recentScores.length || 0.5;
+    taiProb = (taiProb * 0.7 + recentWeight * 0.3); // 70% historical, 30% recent
+    xiuProb = (xiuProb * 0.7 + (1 - recentWeight) * 0.3);
 
     const total = taiProb + xiuProb;
     if (total > 0) {
@@ -96,18 +114,18 @@ function duDoanTX(historicalData, prevTong) {
 }
 
 function duDoan3Tong(faces, historicalData) {
-    const scoreCounts = historicalData.scoreCounts;
+    const weightedScoreCounts = historicalData.weightedScoreCounts;
     const baseSum = faces.reduce((a, b) => a + b, 0);
 
     const possibleSums = [];
     for (let s = Math.max(3, baseSum - 3); s <= Math.min(18, baseSum + 3); s++) {
         possibleSums.push(s);
     }
-    
-    const totalCount = Object.values(scoreCounts).reduce((a, b) => a + b, 0);
+
+    const totalCount = Object.values(weightedScoreCounts).reduce((a, b) => a + b, 0) || 1;
     const sumProbs = possibleSums.map(s => ({
         sum: s,
-        prob: (scoreCounts[s] || 0) / (totalCount || 1)
+        prob: (weightedScoreCounts[s] || 0) / totalCount
     }));
 
     sumProbs.sort((a, b) => b.prob - a.prob);
@@ -127,6 +145,56 @@ function doTinCay(tong, historicalData) {
     return `${Math.round(confidence * 100)}%`;
 }
 
+// --- AI Model for Tài/Xỉu Prediction ---
+function trainAIModel(data) {
+    const results = data.data.resultList || [];
+    const features = [];
+    const labels = [];
+
+    // Extract features: previous score, last 5 scores' Tài/Xỉu ratio, bonus count
+    for (let i = 1; i < results.length; i++) {
+        const prevScore = results[i].score;
+        const currScore = results[i - 1].score;
+        const lastFiveScores = results.slice(Math.max(0, i - 5), i).map(r => r.score);
+        const taiRatio = lastFiveScores.filter(s => s >= 11).length / (lastFiveScores.length || 1);
+        const bonusCount = results[i].lastBonusCount || 0;
+
+        features.push([prevScore, taiRatio, bonusCount]);
+        labels.push(currScore >= 11 ? 1 : 0); // 1 for Tài, 0 for Xỉu
+    }
+
+    if (features.length < 10) { // Require at least 10 data points for training
+        return null;
+    }
+
+    // Train logistic regression model
+    const model = new LogisticRegression({
+        numSteps: 1000,
+        learningRate: 0.1
+    });
+    model.train(features, labels);
+
+    return model;
+}
+
+function predictWithAI(model, prevScore, recentScores, bonusCount) {
+    if (!model) {
+        return { prediction: "Tài", confidence: 0.5 }; // Fallback
+    }
+
+    const taiRatio = recentScores.filter(s => s >= 11).length / (recentScores.length || 1);
+    const features = [[prevScore, taiRatio, bonusCount]];
+    
+    // Model expects a 2D array, even for a single prediction
+    const prediction = model.predict(features)[0];
+    const probabilities = model.predictProba(features)[0];
+
+    return {
+        prediction: prediction === 1 ? "Tài" : "Xỉu",
+        confidence: prediction === 1 ? probabilities[1] : probabilities[0]
+    };
+}
+
 // --- API Endpoints ---
 app.get("/api/taixiu", async (req, res) => {
     try {
@@ -135,7 +203,7 @@ app.get("/api/taixiu", async (req, res) => {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        
+
         const results = data.data.resultList;
         if (!results || results.length < 2) {
             return res.status(404).json({ error: "Insufficient data for prediction" });
@@ -144,25 +212,40 @@ app.get("/api/taixiu", async (req, res) => {
         const historicalData = analyzeHistoricalData(data);
         const latest = results[0];
         const prevTong = results[1].score;
+        const recentScores = results.slice(0, 5).map(r => r.score);
+        const bonusCount = latest.lastBonusCount || 0;
 
         const phien = latest.gameNum;
         const tong = latest.score;
         const faces = latest.facesList;
 
-        const { prediction, confidence } = duDoanTX(historicalData, prevTong);
-        
+        // Enhanced algorithm predictions
+        const { prediction: txPrediction, confidence: txConfidence } = duDoanTX(historicalData, prevTong, recentScores);
+
+        // AI model predictions
+        const aiModel = trainAIModel(data);
+        const { prediction: aiPrediction, confidence: aiConfidence } = predictWithAI(aiModel, prevTong, recentScores, bonusCount);
+
         const result = {
-            "phien_truoc": phien,
-            "xuc_xac": faces,
-            "tong": tong,
-            "md5": latest.md5,
-            "phien_sau": `#${parseInt(phien.replace('#', '')) + 1}`,
-            "du_doan": prediction,
-            "du_doan_confidence": `${Math.round(confidence * 100)}%`,
-            "doan_vi": duDoan3Tong(faces, historicalData),
-            "do_tin_cay": doTinCay(tong, historicalData)
+            phien_truoc: phien,
+            xuc_xac: faces,
+            tong: tong,
+            md5: latest.md5,
+            phien_sau: `#${parseInt(phien.replace('#', '')) + 1}`,
+            du_doan: {
+                statistical: {
+                    prediction: txPrediction,
+                    confidence: `${Math.round(txConfidence * 100)}%`
+                },
+                ai: {
+                    prediction: aiPrediction,
+                    confidence: `${Math.round(aiConfidence * 100)}%`
+                }
+            },
+            doan_vi: duDoan3Tong(faces, historicalData),
+            do_tin_cay: doTinCay(tong, historicalData)
         };
-        
+
         res.json(result);
 
     } catch (error) {
@@ -178,45 +261,57 @@ app.get("/api/validate", async (req, res) => {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        
+
         const results = data.data.resultList;
         if (!results || results.length < 2) {
             return res.status(400).json({ error: "Insufficient data for validation" });
         }
-        
+
         const historicalData = analyzeHistoricalData(data);
+        const aiModel = trainAIModel(data);
         let correctTX = 0;
+        let correctAITX = 0;
         let correctVi = 0;
         const total = results.length - 1;
 
         for (let i = 1; i < results.length; i++) {
             const prevResult = results[i].score;
-            const currResult = results[i-1].score;
-            const currFaces = results[i-1].facesList;
+            const currResult = results[i - 1].score;
+            const currFaces = results[i - 1].facesList;
+            const recentScores = results.slice(Math.max(0, i - 5), i).map(r => r.score);
+            const bonusCount = results[i - 1].lastBonusCount || 0;
 
-            // Validate Tài/Xỉu
-            const { prediction } = duDoanTX(historicalData, prevResult);
+            // Validate statistical Tài/Xỉu
+            const { prediction } = duDoanTX(historicalData, prevResult, recentScores);
             const actual = getTaiXiu(currResult);
             if (prediction === actual) {
                 correctTX++;
             }
-            
+
+            // Validate AI Tài/Xỉu
+            const { prediction: aiPrediction } = predictWithAI(aiModel, prevResult, recentScores, bonusCount);
+            if (aiPrediction === actual) {
+                correctAITX++;
+            }
+
             // Validate dice outcome
             const predictedSums = duDoan3Tong(currFaces, historicalData);
             if (currResult && predictedSums.includes(currResult)) {
                 correctVi++;
             }
         }
-        
+
         const txAccuracy = (correctTX / total) * 100;
+        const aiTxAccuracy = (correctAITX / total) * 100;
         const viAccuracy = (correctVi / total) * 100;
 
         res.json({
-            "tai_xiu_accuracy": `${txAccuracy.toFixed(2)}%`,
-            "dice_outcome_accuracy": `${viAccuracy.toFixed(2)}%`,
-            "total_games_analyzed": total
+            statistical_tai_xiu_accuracy: `${txAccuracy.toFixed(2)}%`,
+            ai_tai_xiu_accuracy: `${aiTxAccuracy.toFixed(2)}%`,
+            dice_outcome_accuracy: `${viAccuracy.toFixed(2)}%`,
+            total_games_analyzed: total
         });
-        
+
     } catch (error) {
         console.error("Error fetching or processing data for validation:", error);
         res.status(500).json({ error: "Failed to fetch data or internal server error" });
