@@ -89,7 +89,7 @@ function duDoanTX(historicalData, prevTong, recentScores) {
         xiuProb *= transitionProbs["Xỉu->Xỉu"];
     }
 
-    const recentTaiCount = recentScores.filter(score => score >= 11).length;
+    const recentTaiCount = recentScores.filter(s => s >= 11).length;
     const recentWeight = recentTaiCount / (recentScores.length || 1);
     taiProb = (taiProb * 0.7) + (recentWeight * 0.3);
     xiuProb = (xiuProb * 0.7) + ((1 - recentWeight) * 0.3);
