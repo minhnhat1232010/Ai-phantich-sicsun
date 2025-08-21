@@ -20,7 +20,6 @@ function analyzeHistoricalData(data) {
     const facesList = results.map(result => result.facesList);
     const bonusCounts = results.map(result => result.lastBonusCount || 0);
 
-    // Calculate frequency of scores and Tài/Xỉu
     const scoreCounts = scores.reduce((acc, score) => {
         acc[score] = (acc[score] || 0) + 1;
         return acc;
@@ -29,7 +28,6 @@ function analyzeHistoricalData(data) {
     const taiCount = scores.filter(score => score >= 11).length;
     const xiuCount = totalGames - taiCount;
 
-    // Calculate transition probabilities
     const transitions = { "Tài->Tài": 0, "Tài->Xỉu": 0, "Xỉu->Tài": 0, "Xỉu->Xỉu": 0 };
     for (let i = 1; i < scores.length; i++) {
         const prev = getTaiXiu(scores[i - 1]);
@@ -44,7 +42,6 @@ function analyzeHistoricalData(data) {
         "Xỉu->Xỉu": transitions["Xỉu->Xỉu"] / (transitions["Xỉu->Tài"] + transitions["Xỉu->Xỉu"] || 1),
     };
 
-    // Calculate dice face frequencies
     const allFaces = [].concat(...facesList);
     const diceFrequencies = allFaces.reduce((acc, face) => {
         acc[face] = (acc[face] || 0) + 1;
@@ -55,12 +52,10 @@ function analyzeHistoricalData(data) {
         diceProbs[i] = (diceFrequencies[i] || 0) / (totalGames * 3);
     }
 
-    // Calculate mean and standard deviation of scores
     const meanScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 10.5;
     const stdScore = scores.length > 0 ? Math.sqrt(scores.map(s => Math.pow(s - meanScore, 2)).reduce((a, b) => a + b, 0) / scores.length) : 1.0;
 
-    // Calculate recency-weighted score probabilities
-    const recencyWeights = scores.map((_, i) => 1 + (totalGames - i) / totalGames); // Linear weight: recent games matter more
+    const recencyWeights = scores.map((_, i) => 1 + (totalGames - i) / totalGames);
     const weightedScoreCounts = scores.reduce((acc, score, i) => {
         acc[score] = (acc[score] || 0) + recencyWeights[i];
         return acc;
@@ -86,7 +81,6 @@ function duDoanTX(historicalData, prevTong, recentScores) {
     let xiuProb = historicalData.xiuProb;
     const transitionProbs = historicalData.transitionProbs;
 
-    // Adjust probabilities with transition probabilities
     if (prevResult === "Tài") {
         taiProb *= transitionProbs["Tài->Tài"];
         xiuProb *= transitionProbs["Tài->Xỉu"];
@@ -95,10 +89,9 @@ function duDoanTX(historicalData, prevTong, recentScores) {
         xiuProb *= transitionProbs["Xỉu->Xỉu"];
     }
 
-    // Incorporate recency: boost probability based on recent games (last 5)
     const recentTaiCount = recentScores.filter(score => score >= 11).length;
     const recentWeight = recentTaiCount / (recentScores.length || 1);
-    taiProb = (taiProb * 0.7) + (recentWeight * 0.3); // 70% historical, 30% recent
+    taiProb = (taiProb * 0.7) + (recentWeight * 0.3);
     xiuProb = (xiuProb * 0.7) + ((1 - recentWeight) * 0.3);
 
     const total = taiProb + xiuProb;
@@ -151,7 +144,6 @@ function trainAIModel(data) {
     const features = [];
     const labels = [];
 
-    // Extract features: previous score, last 5 scores' Tài/Xỉu ratio, bonus count
     for (let i = 1; i < results.length; i++) {
         const prevScore = results[i].score;
         const currScore = results[i - 1].score;
@@ -160,14 +152,13 @@ function trainAIModel(data) {
         const bonusCount = results[i].lastBonusCount || 0;
 
         features.push([prevScore, taiRatio, bonusCount]);
-        labels.push(currScore >= 11 ? 1 : 0); // 1 for Tài, 0 for Xỉu
+        labels.push(currScore >= 11 ? 1 : 0);
     }
 
-    if (features.length < 10) { // Require at least 10 data points for training
+    if (features.length < 10) {
         return null;
     }
 
-    // Train logistic regression model
     const model = new LogisticRegression({
         numSteps: 1000,
         learningRate: 0.1
@@ -179,7 +170,7 @@ function trainAIModel(data) {
 
 function predictWithAI(model, prevScore, recentScores, bonusCount) {
     if (!model) {
-        return { prediction: "Không đủ dữ liệu", confidence: 0.5 }; // Fallback
+        return { prediction: "Không đủ dữ liệu", confidence: 0.5 };
     }
 
     const taiRatio = recentScores.filter(s => s >= 11).length / (recentScores.length || 1);
@@ -219,7 +210,6 @@ app.get("/api/taixiu", async (req, res) => {
         const faces = latest.facesList;
 
         const { prediction: txPrediction, confidence: txConfidence } = duDoanTX(historicalData, prevTong, recentScores);
-
         const aiModel = trainAIModel(data);
         const { prediction: aiPrediction, confidence: aiConfidence } = predictWithAI(aiModel, prevTong, recentScores, bonusCount);
 
