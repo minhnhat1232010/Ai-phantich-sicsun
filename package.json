@@ -1,16 +1,14 @@
 {
-  "name": "taixiu-ai-api",
+  "name": "taixiu-api",
   "version": "1.0.0",
-  "description": "API server for predicting TaiXiu outcomes with statistical and AI models.",
+  "description": "API dự đoán tài xỉu",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "ml-logistic-regression": "^2.1.0",
-    "node-fetch": "^2.7.0"
-  },
-  "author": "Tele@Idol_VanNhat",
-  "license": "ISC"
+    "express": "^4.18.2",
+    "node-fetch": "^2.6.12",
+    "ml-logistic-regression": "^2.0.0"
+  }
 }
