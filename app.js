@@ -1,7 +1,7 @@
 // Import necessary modules
 const express = require('express');
 const fetch = require('node-fetch');
-const { LogisticRegression } = require('ml-logistic-regression'); // Import the AI library
+const { LogisticRegression } = require('ml-logistic-regression');
 const app = express();
 
 // --- Configuration ---
@@ -97,9 +97,9 @@ function duDoanTX(historicalData, prevTong, recentScores) {
 
     // Incorporate recency: boost probability based on recent games (last 5)
     const recentTaiCount = recentScores.filter(score => score >= 11).length;
-    const recentWeight = recentTaiCount / recentScores.length || 0.5;
-    taiProb = (taiProb * 0.7 + recentWeight * 0.3); // 70% historical, 30% recent
-    xiuProb = (xiuProb * 0.7 + (1 - recentWeight) * 0.3);
+    const recentWeight = recentTaiCount / (recentScores.length || 1);
+    taiProb = (taiProb * 0.7) + (recentWeight * 0.3); // 70% historical, 30% recent
+    xiuProb = (xiuProb * 0.7) + ((1 - recentWeight) * 0.3);
 
     const total = taiProb + xiuProb;
     if (total > 0) {
@@ -179,13 +179,12 @@ function trainAIModel(data) {
 
 function predictWithAI(model, prevScore, recentScores, bonusCount) {
     if (!model) {
-        return { prediction: "Tài", confidence: 0.5 }; // Fallback
+        return { prediction: "Không đủ dữ liệu", confidence: 0.5 }; // Fallback
     }
 
     const taiRatio = recentScores.filter(s => s >= 11).length / (recentScores.length || 1);
     const features = [[prevScore, taiRatio, bonusCount]];
-    
-    // Model expects a 2D array, even for a single prediction
+
     const prediction = model.predict(features)[0];
     const probabilities = model.predictProba(features)[0];
 
@@ -200,7 +199,7 @@ app.get("/api/taixiu", async (req, res) => {
     try {
         const response = await fetch(SOURCE_URL);
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return res.status(response.status).json({ error: "Failed to fetch data from source API." });
         }
         const data = await response.json();
 
@@ -219,10 +218,8 @@ app.get("/api/taixiu", async (req, res) => {
         const tong = latest.score;
         const faces = latest.facesList;
 
-        // Enhanced algorithm predictions
         const { prediction: txPrediction, confidence: txConfidence } = duDoanTX(historicalData, prevTong, recentScores);
 
-        // AI model predictions
         const aiModel = trainAIModel(data);
         const { prediction: aiPrediction, confidence: aiConfidence } = predictWithAI(aiModel, prevTong, recentScores, bonusCount);
 
@@ -258,7 +255,7 @@ app.get("/api/validate", async (req, res) => {
     try {
         const response = await fetch(SOURCE_URL);
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return res.status(response.status).json({ error: "Failed to fetch data from source API." });
         }
         const data = await response.json();
 
@@ -281,20 +278,17 @@ app.get("/api/validate", async (req, res) => {
             const recentScores = results.slice(Math.max(0, i - 5), i).map(r => r.score);
             const bonusCount = results[i - 1].lastBonusCount || 0;
 
-            // Validate statistical Tài/Xỉu
             const { prediction } = duDoanTX(historicalData, prevResult, recentScores);
             const actual = getTaiXiu(currResult);
             if (prediction === actual) {
                 correctTX++;
             }
 
-            // Validate AI Tài/Xỉu
             const { prediction: aiPrediction } = predictWithAI(aiModel, prevResult, recentScores, bonusCount);
             if (aiPrediction === actual) {
                 correctAITX++;
             }
 
-            // Validate dice outcome
             const predictedSums = duDoan3Tong(currFaces, historicalData);
             if (currResult && predictedSums.includes(currResult)) {
                 correctVi++;
